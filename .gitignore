@@ -6,4 +6,5 @@ dist/
 *.pfx
 credentials.json
 work/
-outputs/
+outputs/*
+!outputs/index.html

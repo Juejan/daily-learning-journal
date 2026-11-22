@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>每日所学</title>
+<style>
+:root{color-scheme:light;--ink:#173830;--muted:#526761;--line:#cfddd6;--paper:#fff;--green:#235947}
+*{box-sizing:border-box}
+body{margin:0;background:#eef4ef;color:var(--ink);font:1rem/1.6 system-ui,"Microsoft YaHei",sans-serif}
+main{max-width:54rem;margin:auto;padding:3rem 1.25rem 4rem}
+header{display:flex;align-items:end;justify-content:space-between;gap:1.5rem;margin-bottom:1.75rem}
+h1,h2,h3,p{margin:0}
+h1{font-size:clamp(2rem,5vw,3rem);line-height:1.15;letter-spacing:-.04em}
+h2{font-size:1.3rem}
+h3{font-size:1rem}
+label{display:grid;gap:.35rem;font-size:.9rem;font-weight:600}
+input,textarea,button{font:inherit}
+input,textarea{width:100%;color:var(--ink);border:1px solid var(--line);border-radius:.65rem;background:var(--paper);padding:.6rem .8rem}
+textarea{resize:vertical;min-height:8rem}
+button{border:1px solid transparent;border-radius:.65rem;min-height:2.75rem;padding:.4rem 1rem;cursor:pointer}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid #679781;outline-offset:2px}
+.primary{background:var(--green);color:white;font-weight:600}
+.secondary{background:#edf4ef;color:var(--ink)}
+.panel{background:var(--paper);border:1px solid var(--line);border-radius:1rem;padding:clamp(1rem,4vw,1.75rem);box-shadow:0 8px 28px #193b2910}
+form{display:grid;gap:1rem}
+.fields{display:grid;grid-template-columns:1fr minmax(9rem,auto);gap:.75rem}
+.actions{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
+.status,.muted,.empty{color:var(--muted)}
+.status{font-size:.9rem}
+.error{color:#9a3026}
+.timeline{margin-top:2.25rem}
+.timeline>h2{margin-bottom:.85rem}
+.group{margin-bottom:1.3rem}
+.group>h3{margin-bottom:.45rem}
+.note{background:var(--paper);border:1px solid var(--line);border-radius:.75rem;padding:.8rem 1rem;margin-bottom:.5rem}
+summary{cursor:pointer;overflow-wrap:anywhere}
+.note p{white-space:pre-wrap;overflow-wrap:anywhere;margin:.65rem 0}
+mark{background:#f8e9aa;color:inherit}
+[hidden]{display:none!important}
+@media(max-width:36rem){main{padding-top:1.75rem}header{align-items:stretch;flex-direction:column;gap:1rem}.fields{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>每日所学</h1><p class="muted">随手记下今天的新发现</p></div>
+    <label>搜索笔记<input id="search" type="search" placeholder="搜索标题或正文"></label>
+  </header>
+  <form id="editor" class="panel">
+    <h2 id="editor-title">记录一条所学</h2>
+    <label>正文<textarea id="body" required placeholder="今天学到了什么？"></textarea></label>
+    <div class="fields">
+      <label>标题（选填）<input id="title"></label>
+      <label>学习日期<input id="date" type="date" required></label>
+    </div>
+    <div class="actions">
+      <button id="save" class="primary" type="submit">保存笔记</button>
+      <button id="cancel" class="secondary" type="button" hidden>取消编辑</button>
+      <span id="status" class="status" role="status" aria-live="polite"></span>
+    </div>
+  </form>
+  <section class="timeline" aria-labelledby="timeline-title">
+    <h2 id="timeline-title">学习时间线</h2>
+    <div id="notes"></div>
+  </section>
+</main>
+<script>
+'use strict';
+const storeKey = 'daily-learning-notes-v1';
+const editor = document.getElementById('editor');
+const editorTitle = document.getElementById('editor-title');
+const bodyField = document.getElementById('body');
+const titleField = document.getElementById('title');
+const dateField = document.getElementById('date');
+const search = document.getElementById('search');
+const status = document.getElementById('status');
+const cancel = document.getElementById('cancel');
+const save = document.getElementById('save');
+const list = document.getElementById('notes');
+let notes = [];
+let editing = null;
+
+function today() {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${month}-${day}`;
+}
+
+function announce(message, error = false) {
+  status.textContent = message;
+  status.classList.toggle('error', error);
+}
+
+function element(tag, value, className) {
+  const node = document.createElement(tag);
+  if (value !== undefined) node.textContent = value;
+  if (className) node.className = className;
+  return node;
+}
+
+function contains(value, query) {
+  return value.toLowerCase().includes(query.toLowerCase());
+}
+
+function excerpt(value, query) {
+  const match = query ? value.toLowerCase().indexOf(query.toLowerCase()) : -1;
+  const start = Math.max(0, match - 28);
+  const end = Math.max(start + 88, match + query.length + 28);
+  const before = start ? '…' : '';
+  const after = end < value.length ? '…' : '';
+  const fragment = document.createDocumentFragment();
+  if (match === -1) {
+    fragment.append(value.slice(0, end) + after);
+  } else {
+    fragment.append(before + value.slice(start, match),
+      element('mark', value.slice(match, match + query.length)),
+      value.slice(match + query.length, end) + after);
+  }
+  return fragment;
+}
+
+function resetEditor() {
+  editing = null;
+  editor.reset();
+  dateField.value = today();
+  editorTitle.textContent = '记录一条所学';
+  save.textContent = '保存笔记';
+  cancel.hidden = true;
+}
+
+function editNote(note) {
+  editing = note.id;
+  bodyField.value = note.body;
+  titleField.value = note.title;
+  dateField.value = note.date;
+  editorTitle.textContent = '编辑笔记';
+  save.textContent = '保存修改';
+  cancel.hidden = false;
+  announce('');
+  bodyField.focus();
+}
+
+function render() {
+  const query = search.value.trim();
+  const matches = notes.filter(note => contains(note.title, query) || contains(note.body, query))
+    .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
+  list.replaceChildren();
+  if (!matches.length) {
+    list.append(element('p', query ? '没有找到匹配的笔记。' : '还没有笔记。记下今天学到的一件事吧。', 'empty'));
+    return;
+  }
+  let group;
+  let currentDate;
+  for (const note of matches) {
+    if (note.date !== currentDate) {
+      currentDate = note.date;
+      group = element('section', undefined, 'group');
+      const heading = element('h3');
+      const date = element('time', note.date);
+      date.dateTime = note.date;
+      heading.append(date);
+      group.append(heading);
+      list.append(group);
+    }
+    const card = element('details', undefined, 'note');
+    const summary = element('summary');
+    if (note.title) {
+      const title = element('strong');
+      title.append(excerpt(note.title, query));
+      summary.append(title, ' · ');
+    }
+    summary.append(excerpt(note.body, query));
+    const edit = element('button', '编辑', 'secondary');
+    edit.type = 'button';
+    edit.addEventListener('click', () => editNote(note));
+    card.append(summary, element('p', note.body), edit);
+    group.append(card);
+  }
+}
+
+editor.addEventListener('submit', event => {
+  event.preventDefault();
+  const body = bodyField.value.trim();
+  if (!body || !dateField.value) {
+    announce('请输入正文并选择学习日期。', true);
+    return;
+  }
+  const original = notes.find(note => note.id === editing);
+  const note = {
+    id: original?.id ?? crypto.randomUUID(),
+    createdAt: original?.createdAt ?? Date.now(),
+    body,
+    title: titleField.value.trim(),
+    date: dateField.value
+  };
+  const updated = original ? notes.map(item => item.id === editing ? note : item) : [...notes, note];
+  try {
+    localStorage.setItem(storeKey, JSON.stringify(updated));
+  } catch {
+    announce('保存失败，请检查浏览器是否允许本地存储。正文仍在输入框里。', true);
+    return;
+  }
+  notes = updated;
+  resetEditor();
+  search.value = '';
+  render();
+  announce(original ? '修改已保存。' : '笔记已保存。');
+  bodyField.focus();
+});
+
+cancel.addEventListener('click', () => {
+  resetEditor();
+  announce('');
+  bodyField.focus();
+});
+search.addEventListener('input', render);
+resetEditor();
+try {
+  const saved = JSON.parse(localStorage.getItem(storeKey) ?? '[]');
+  if (!Array.isArray(saved) || saved.some(note => !note ||
+    ['id', 'body', 'title', 'date'].some(key => typeof note[key] !== 'string') ||
+    !Number.isFinite(note.createdAt))) throw new Error('Invalid notes');
+  notes = saved;
+} catch {
+  save.disabled = true;
+  announce('暂时无法读取本地笔记。请检查浏览器的存储权限。', true);
+}
+render();
+</script>
+</body>
+</html>
